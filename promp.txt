@@ -1,0 +1,19 @@
+I have an idea that create an api test framework by python, user can create test case by given an xlsx file create from templat
+xlsx contains minimum 3 sheets
+first one is environment sheet. It only use 2 first colums A and B as key and value and can be access/modify by value key with $ as prefix like $key1
+second sheet and third sheet is same, but second one name "Setup" and only ran 1 time
+>= Third sheet contains all test case and user journey. It will ran Setup before run any other test case sheet, it will stop sheet's test case and ran the next sheet test case till last.
+Each sheet test case contain following colums:
+test_case_name,
+api_path (it might contain path param, the param),
+query_param (example: [{'abc', 'xyz'}]),
+method,
+inject_header (example: [{'header1', 'value1'}, {'header2', 'value2'}],
+body,
+expect_response_code,
+expect_response_body,
+expect_response_header,
+action
+The response json will be result variable
+On expect, it will be evalue through psudo code like contains('abc'), equal('abc'), greatThan(result.code, 200)
+It need able to set variable on sheet1 for updating value getting from response api. For example, I can set something like following on action column:  $accessToken = result.accessToken

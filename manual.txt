@@ -1,0 +1,185 @@
+# TestXLAPI User Manual
+
+## Overview
+
+TestXLAPI is a Python-based API testing framework that allows users to define and execute API test cases using Excel spreadsheets. This approach makes API testing accessible to team members with limited programming experience while providing structure and repeatability through spreadsheet templates.
+
+## Key Features
+
+- Define test cases in Excel spreadsheets
+- Support for environment variables with `$` prefix
+- Run setup operations once before test cases
+- Execute test cases across multiple sheets
+- Validate responses against expectations
+- Set variables from response data
+- Verbose mode for detailed debugging
+
+## Excel Template Structure
+
+Each TestXLAPI Excel file contains at least 3 sheets:
+
+### 1. Environment Sheet (First Sheet)
+
+Contains key-value pairs for environment variables.
+
+| Key | Value |
+|-----|-------|
+| base_url | https://api.example.com |
+| username | testuser |
+| password | testpass |
+
+Environment variables can be referenced in other sheets using the `$` prefix (e.g., `$base_url`).
+
+### 2. Setup Sheet (Second Sheet)
+
+Contains test cases that run once before all other test cases. Typically used for authentication or prerequisite data setup.
+
+### 3. Test Case Sheets (Third Sheet and Beyond)
+
+Contains test cases grouped into user journeys or functional areas. Each sheet is executed sequentially, and within a sheet, test cases run in order until completion or failure.
+
+## Test Case Structure
+
+Each test case row contains the following columns:
+
+| Column | Description | Example |
+|--------|-------------|---------|
+| test_case_name | Name of the test case | "Get User Profile" |
+| api_path | API endpoint path | "$base_url/api/v1/users" |
+| query_param | URL query parameters | "[{'userId', '123'}, {'format', 'json'}]" |
+| method | HTTP method | "GET", "POST", "PUT", "DELETE" |
+| inject_header | HTTP headers | "[{'Authorization', 'Bearer $token'}, {'Content-Type', 'application/json'}]" |
+| body | Request body (usually JSON) | "{'name': 'Test User', 'email': 'test@example.com'}" |
+| expect_response_code | Expected HTTP status code | 200, 201, 400, 404, etc. |
+| expect_response_body | Body validation expression | "contains(result.body, 'success')" |
+| expect_response_header | Header validation expression | "contains(result.headers, 'application/json')" |
+| action | Actions to perform after the test | "$userId = result.body.id" |
+| verbose | Enable detailed output | "true" or "false" |
+
+## Validation Expressions
+
+Validation expressions are used in `expect_response_body` and `expect_response_header` columns:
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| contains(data, value) | Check if data contains value | "contains(result.body, 'success')" |
+| equal(data, value) | Check if data equals value | "equal(result.body.status, 'active')" |
+| greatThan(data, value) | Check if data is greater than value | "greatThan(result.code, 199)" |
+| lessThan(data, value) | Check if data is less than value | "lessThan(result.code, 300)" |
+
+You can combine expressions using logical operators:
+```
+contains(result.body, 'id') and equal(result.body.active, true)
+```
+
+## Action Expressions
+
+Action expressions allow you to extract values from responses and store them as environment variables:
+
+```
+$token = result.body.access_token
+```
+
+You can set multiple variables in one action by separating them with semicolons or newlines:
+
+```
+$userId = result.body.id; $username = result.body.username
+```
+
+## Available Variables
+
+In validation and action expressions, you can access response data using these variables:
+
+| Variable | Description |
+|----------|-------------|
+| result.code | HTTP status code |
+| result.body | Response body (as JSON object) |
+| result.headers | Response headers (as dictionary) |
+
+## Example Test Cases
+
+### Authentication
+
+```
+Test Name: Login
+API Path: $base_url/auth/login
+Method: POST
+Body: {"username": "$username", "password": "$password"}
+Expect Code: 200
+Expect Body: contains(result.body, 'token')
+Action: $token = result.body.token
+```
+
+### Creating a Resource
+
+```
+Test Name: Create User
+API Path: $base_url/api/users
+Method: POST
+Headers: [{'Authorization', 'Bearer $token'}, {'Content-Type', 'application/json'}]
+Body: {"name": "John Doe", "email": "john@example.com"}
+Expect Code: 201
+Expect Body: contains(result.body, 'id')
+Action: $userId = result.body.id
+```
+
+### Retrieving a Resource
+
+```
+Test Name: Get User
+API Path: $base_url/api/users/$userId
+Method: GET
+Headers: [{'Authorization', 'Bearer $token'}]
+Expect Code: 200
+Expect Body: equal(result.body.name, 'John Doe')
+```
+
+### Deleting a Resource
+
+```
+Test Name: Delete User
+API Path: $base_url/api/users/$userId
+Method: DELETE
+Headers: [{'Authorization', 'Bearer $token'}]
+Expect Code: 204
+```
+
+## Best Practices
+
+1. **Organize test cases into logical sheets** - Group related test cases in the same sheet
+2. **Use descriptive test case names** - This makes failure reports easier to understand
+3. **Use Setup for authentication** - Handle login/token generation in the Setup sheet
+4. **Use environment variables** - Store URLs, credentials, and other configurable values as environment variables
+5. **Use verbose mode for debugging** - Set verbose=true for test cases that need more detailed output
+6. **Handle dependencies properly** - When a test case depends on data from previous tests, ensure variables are set correctly
+7. **Include validation for important fields** - Don't just check status codes; validate response content too
+
+## Common Patterns
+
+### Authentication Flow
+
+1. Setup sheet: Perform login and store token
+2. Other sheets: Use the token for authenticated requests
+
+### CRUD Operations
+
+1. Create a resource and store its ID
+2. Retrieve the resource using the ID
+3. Update the resource
+4. Delete the resource
+5. Verify deletion by attempting to retrieve (expect 404)
+
+### User Journeys
+
+Create sheets that represent real user interactions with your API:
+- Registration Flow
+- Purchase Flow
+- Account Management Flow
+
+## Debugging Tips
+
+1. Set `verbose=true` for detailed response information
+2. Check environment variables by adding a test case that prints values
+3. For Unicode/special character issues, ensure proper encoding
+4. Look for mismatched quotes in conditions and JSON
+5. Verify your API path and parameters manually before testing
