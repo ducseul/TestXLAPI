@@ -8,8 +8,13 @@ import sys
 # import openpyxl # Removed openpyxl
 # from openpyxl.utils import get_column_letter # Removed openpyxl helper
 import traceback  # Import traceback for detailed error info
-from collections import OrderedDict  # Use OrderedDict to maintain column order
+from collections import OrderedDict, defaultdict  # Use OrderedDict to maintain column order
 
+from reportlab.platypus import SimpleDocTemplate, Table, Paragraph, Spacer, PageBreak
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+from reportlab.lib.units import inch
 
 class APITestFramework:
     def __init__(self, xlsx_path: str):
@@ -405,6 +410,7 @@ class APITestFramework:
             "body_validation": "N/A",
             "header_validation": "N/A",
             "details": "",
+            "elapsed_time_ms": "N/A", # Initialize elapsed_time_ms here
             # Optional: store request/response snippets in detailed_result for rich printing later
             # "request": {},
             # "response": {}
@@ -501,6 +507,7 @@ class APITestFramework:
             # detailed_result["response"] = api_result_data
 
             detailed_result["actual_code"] = response.status_code  # Update actual code in result
+            detailed_result["elapsed_time_ms"] = api_result_data["elapsed_time_ms"] # **Added: Copy elapsed time to detailed_result**
 
             # --- Validations ---
             body_validation_status = "N/A"
@@ -579,7 +586,7 @@ class APITestFramework:
             self.verbose = False  # Reset verbose flag
 
     def _print_sheet_results_table(self, sheet_name: str, results_list: List[Dict[str, Any]]) -> None:
-        """Prints the results for a single sheet in a formatted table."""
+        """Prints the results for a single sheet in a formatted table, including Response Time."""
         if not results_list:
             print(f"\nNo test cases executed in sheet '{sheet_name}'.")
             return
@@ -587,8 +594,10 @@ class APITestFramework:
         print(f"\n--- Results for Sheet: {sheet_name} ---")
 
         # Define columns and their corresponding keys in the result dictionary
+        # Added 'Response Time' column
         columns = OrderedDict([
             ("Test Name", "test_name"),
+            ("Response Time", "elapsed_time_ms"), # Added Response Time key
             ("Status", "status"),
             ("Code", "actual_code"),
             ("Body Val", "body_validation"),
@@ -604,8 +613,12 @@ class APITestFramework:
         for result in results_list:
             for header, key in columns.items():
                 value = result.get(key, '')
-                # Convert value to string, truncate details for width calculation
-                value_str = str(value)
+                # Format response time for display and width calculation
+                if key == "elapsed_time_ms":
+                    value_str = f"{value:.2f} ms" if isinstance(value, (int, float)) else str(value)
+                else:
+                    value_str = str(value)
+
                 if header == "Details":
                     value_str = value_str[:max_details_width]  # Truncate for width calculation
                 col_widths[header] = max(col_widths[header], len(value_str))
@@ -629,7 +642,12 @@ class APITestFramework:
             row_data = []
             for header, key in columns.items():
                 value = result.get(key, '')
-                value_str = str(value)
+                # Format response time for display
+                if key == "elapsed_time_ms":
+                     value_str = f"{value:.2f} ms" if isinstance(value, (int, float)) else str(value)
+                else:
+                    value_str = str(value)
+
 
                 # Truncate and pad details separately
                 if header == "Details":
@@ -768,21 +786,222 @@ class APITestFramework:
         print(f"Skipped: {skipped_count}")
         print("-" * 30)
 
+    def generate_pdf_report(self, output_path: str = "test_report.pdf"):
+        """Generates a PDF report of the test results with per-sheet insights,
+           failed/errored tests, and slowest tests."""
+        # Ensure you have these imports at the top of your file:
+        # from reportlab.platypus import SimpleDocTemplate, Table, Paragraph, Spacer, PageBreak
+        # from reportlab.lib.pagesizes import letter
+        # from reportlab.lib.styles import getSampleStyleSheet
+        # from reportlab.lib import colors
+        # from reportlab.lib.units import inch
+        # from collections import defaultdict
+        # import pandas as pd # Ensure pandas is imported for isnan checks
 
-def run_test_suite(xlsx_path: str) -> None:
-    """Run a test suite from an Excel file"""
-    test_framework = APITestFramework(xlsx_path)
-    test_framework.run_tests()
+        doc = SimpleDocTemplate(output_path, pagesize=letter)
+        elements = []
+        styles = getSampleStyleSheet()
 
+        # Add a main title
+        elements.append(Paragraph("API Test Report", styles['Title']))
+        elements.append(Spacer(1, 0.5 * inch))
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python api_test_framework.py <path_to_excel_file>")
-        sys.exit(1)
+        # --- Overall Summary ---
+        elements.append(Paragraph("Overall Test Run Summary", styles['Heading1']))
+        total_attempted_overall = len(self.results)
+        passed_count_overall = 0
+        failed_count_overall = 0
+        error_count_overall = 0
+        skipped_count_overall = 0
 
-    xlsx_path = sys.argv[1]
-    if not os.path.exists(xlsx_path):
-        print(f"Error: File '{xlsx_path}' not found")
-        sys.exit(1)
+        for result_data in self.results.values():
+            status = result_data.get("status", "Unknown")
+            if status == "Passed":
+                passed_count_overall += 1
+            elif status == "Failed":
+                failed_count_overall += 1
+            elif status == "Error":
+                error_count_overall += 1
+            elif status == "Skipped":
+                skipped_count_overall += 1
 
-    run_test_suite(xlsx_path)
+        summary_data_overall = [['Total Attempted', 'Passed', 'Failed', 'Errors', 'Skipped'],
+                                [total_attempted_overall, passed_count_overall, failed_count_overall,
+                                 error_count_overall, skipped_count_overall]]
+
+        summary_table_style = [
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]
+
+        summary_table_overall = Table(summary_data_overall, colWidths=[1.2 * inch] * 5)
+        summary_table_overall.setStyle(summary_table_style)
+        elements.append(summary_table_overall)
+        elements.append(Spacer(1, 0.75 * inch))
+
+        # --- Group results by Sheet ---
+        results_by_sheet = defaultdict(list)
+        sorted_full_test_names = sorted(self.results.keys())
+        for full_test_name in sorted_full_test_names:
+            sheet_name, test_name = full_test_name.split("::", 1)
+            results_by_sheet[sheet_name].append(self.results[full_test_name])
+
+        # --- Add Section for Each Sheet ---
+        sorted_sheet_names = sorted(results_by_sheet.keys())
+
+        first_sheet = True
+
+        for sheet_name in sorted_sheet_names:
+            sheet_results_list = results_by_sheet[sheet_name]
+
+            if not first_sheet:
+                elements.append(PageBreak())
+            else:
+                first_sheet = False
+
+            elements.append(Paragraph(f"Results for Sheet: {sheet_name}", styles['Heading2']))
+            elements.append(Spacer(1, 0.25 * inch))
+
+            # Calculate per-sheet summary
+            total_attempted_sheet = len(sheet_results_list)
+            passed_count_sheet = 0
+            failed_count_sheet = 0
+            error_count_sheet = 0
+            skipped_count_sheet = 0
+
+            for result_data in sheet_results_list:
+                status = result_data.get("status", "Unknown")
+                if status == "Passed":
+                    passed_count_sheet += 1
+                elif status == "Failed":
+                    failed_count_sheet += 1
+                elif status == "Error":
+                    error_count_sheet += 1
+                elif status == "Skipped":
+                    skipped_count_sheet += 1
+
+            summary_data_sheet = [['Total Attempted', 'Passed', 'Failed', 'Errors', 'Skipped'],
+                                  [total_attempted_sheet, passed_count_sheet, failed_count_sheet, error_count_sheet,
+                                   skipped_count_sheet]]
+
+            summary_table_sheet = Table(summary_data_sheet, colWidths=[1.2 * inch] * 5)
+            summary_table_sheet.setStyle(summary_table_style)
+            elements.append(summary_table_sheet)
+            elements.append(Spacer(1, 0.4 * inch))
+
+            # Add Detailed Results for this Sheet
+            elements.append(Paragraph("Detailed Results (This Sheet)", styles['Heading3']))
+            elements.append(Spacer(1, 0.1 * inch))
+
+            for result_data in sheet_results_list:
+                test_name = result_data.get("test_name", "N/A")
+                status = result_data.get("status", "Unknown")
+                actual_code = result_data.get("actual_code", "N/A")
+                elapsed_time_ms = result_data.get("elapsed_time_ms", "N/A")
+                body_validation = result_data.get("body_validation", "N/A")
+                header_validation = result_data.get("header_validation", "N/A")
+                details = result_data.get("details", "")
+
+                text_color = colors.black
+                if status == "Passed":
+                    text_color = colors.green
+                elif status in ["Failed", "Error"]:
+                    text_color = colors.red
+
+                elements.append(Paragraph(f"<b>Test Case:</b> {test_name}", styles['Normal']))
+                elements.append(
+                    Paragraph(f"<b>Status:</b> <font color='{text_color}'>{status}</font>", styles['Normal']))
+                elements.append(Paragraph(f"<b>Response Code:</b> {actual_code}", styles['Normal']))
+
+                if isinstance(elapsed_time_ms, (int, float)):
+                    elements.append(Paragraph(f"<b>Response Time:</b> {elapsed_time_ms:.2f} ms", styles['Normal']))
+                else:
+                    elements.append(Paragraph(f"<b>Response Time:</b> {elapsed_time_ms}", styles['Normal']))
+
+                elements.append(Paragraph(f"<b>Body Validation:</b> {body_validation}", styles['Normal']))
+                elements.append(Paragraph(f"<b>Header Validation:</b> {header_validation}", styles['Normal']))
+                if details:
+                    details_str = str(details) if not pd.isna(details) else ""
+                    elements.append(Paragraph(f"<b>Details:</b> {details_str}", styles['Normal']))
+                elements.append(Spacer(1, 0.25 * inch))
+
+        # --- Section for Failed and Errored Test Cases ---
+        # Iterate through items to get the full test name (key) and result data (value)
+        failed_errored_tests_items = [
+            (full_name, result) for full_name, result in self.results.items()
+            if result.get("status") in ["Failed", "Error"]
+        ]
+
+        if failed_errored_tests_items:
+            elements.append(PageBreak())
+            elements.append(Paragraph("Failed and Errored Test Cases", styles['Heading1']))
+            elements.append(Spacer(1, 0.25 * inch))
+
+            for full_test_name, result_data in failed_errored_tests_items:
+                # Extract sheet_name and test_name from the full_test_name key
+                sheet_name, test_name = full_test_name.split("::", 1)
+
+                status = result_data.get("status", "Unknown")
+                actual_code = result_data.get("actual_code", "N/A")
+                details = result_data.get("details", "")
+
+                # Use the extracted sheet_name and test_name for the title
+                elements.append(Paragraph(f"<b>Test Case:</b> {sheet_name}::{test_name}", styles['Normal']))
+                elements.append(
+                    Paragraph(f"<b>Status:</b> <font color='{colors.red}'>{status}</font>", styles['Normal']))
+                elements.append(Paragraph(f"<b>Response Code:</b> {actual_code}", styles['Normal']))
+                if details:
+                    details_str = str(details) if not pd.isna(details) else ""
+                    elements.append(Paragraph(f"<b>Details:</b> {details_str}", styles['Normal']))
+                elements.append(Spacer(1, 0.25 * inch))
+
+        # --- Section for Slowest Tests ---
+        # Filter out tests that don't have a valid elapsed time before sorting
+        # Iterate through items to keep the full test name (key) for sorting
+        tests_with_time_items = [
+            (full_name, result) for full_name, result in self.results.items()
+            if isinstance(result.get("elapsed_time_ms"), (int, float))
+        ]
+
+        # Sort by elapsed time in descending order using the value from the dictionary
+        slowest_tests_items = sorted(tests_with_time_items, key=lambda item: item[1].get("elapsed_time_ms", 0),
+                                     reverse=True)
+
+        # Define how many slowest tests to show (e.g., top 10)
+        top_n_slowest = 10
+        slowest_tests_to_show_items = slowest_tests_items[:top_n_slowest]
+
+        if slowest_tests_to_show_items:
+            elements.append(PageBreak())
+            elements.append(Paragraph(f"Top {top_n_slowest} Slowest Test Cases", styles['Heading1']))
+            elements.append(Spacer(1, 0.25 * inch))
+
+            for full_test_name, result_data in slowest_tests_to_show_items:
+                # Extract sheet_name and test_name from the full_test_name key
+                sheet_name, test_name = full_test_name.split("::", 1)
+
+                elapsed_time_ms = result_data.get("elapsed_time_ms", "N/A")
+                status = result_data.get("status", "Unknown")
+
+                # Use the extracted sheet_name and test_name for the title
+                elements.append(Paragraph(f"<b>Test Case:</b> {sheet_name}::{test_name}", styles['Normal']))
+                if isinstance(elapsed_time_ms, (int, float)):
+                    elements.append(Paragraph(f"<b>Response Time:</b> {elapsed_time_ms:.2f} ms", styles['Normal']))
+                else:
+                    elements.append(Paragraph(f"<b>Response Time:</b> {elapsed_time_ms}", styles['Normal']))
+
+                elements.append(Paragraph(f"<b>Status:</b> {status}", styles['Normal']))
+                elements.append(Spacer(1, 0.25 * inch))
+
+        # Build the PDF document
+        try:
+            doc.build(elements)
+            print(f"PDF report generated successfully at {output_path}")
+        except Exception as e:
+            print(f"Error generating PDF report: {e}")

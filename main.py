@@ -1,53 +1,28 @@
+import argparse
+import template_generator
 from exl_api_fw import APITestFramework
 
-# # First create your template Excel file
-# import template_generator
-#
-# template_generator.create_template_xlsx("my_api_tests.xlsx")
 
-
-# Now you can edit the Excel file manually with your API test details
-# After editing, run the tests:
-def run_example():
-    test_framework = APITestFramework("my_api_tests.xlsx")
-    results = test_framework.run_tests()
-
-    # # You can also examine the results programmatically
-    # print("\n=== Test Results Summary ===")
-    # total_executed = 0
-    # passed_count = 0
-    # failed_count = 0
-    # skipped_count = 0
-    #
-    # for test_name, result_data in results.items():
-    #     status = result_data.get("status", "Unknown")
-    #     if status == "Executed":  # Cases that ran but maybe didn't have validations resulting in Pass/Fail yet
-    #         print(f"- {test_name}: Status Unknown (executed but no final status)")
-    #         total_executed += 1  # Count executed tests
-    #     elif status == "Passed":
-    #         print(f"✅ {test_name}: PASSED")
-    #         passed_count += 1
-    #         total_executed += 1
-    #     elif status == "Failed":
-    #         error_msg = result_data.get("error", "")
-    #         print(f"❌ {test_name}: FAILED {error_msg}")
-    #         failed_count += 1
-    #         total_executed += 1
-    #     elif status == "Skipped":
-    #         reason = result_data.get("reason", "")
-    #         print(f"⏭️ {test_name}: SKIPPED {reason}")
-    #         skipped_count += 1
-    #     else:
-    #         print(f"? {test_name}: Status Unknown ({status})")
-    #         total_executed += 1  # Assume executed if status is weird
-    #
-    # print("-" * 30)
-    # print(f"Total Test Cases Defined/Attempted: {len(results)}")
-    # print(f"Total Executed: {total_executed}")
-    # print(f"Passed: {passed_count}")
-    # print(f"Failed: {failed_count}")
-    # print(f"Skipped: {skipped_count}")
-    # print("-" * 30)
+def run_example(test_file, report_name='api_test_report'):
+    test_framework = APITestFramework(test_file)
+    test_framework.run_tests()
+    test_framework.generate_pdf_report(f"{report_name}.pdf")
 
 if __name__ == "__main__":
-    run_example()
+    parser = argparse.ArgumentParser(description="""
+        This framework provides a powerful yet simple way to automate API testing using familiar Excel spreadsheets. 
+        By understanding the file structure, column definitions, and supported features like environment variables, 
+        evaluation conditions, and actions, you can create comprehensive test suites for your APIs. 
+        The detailed console output helps you debug and understand the results of each test case.
+    """)
+    parser.add_argument("test_file", help="Path to the Excel (.xlsx) test file to use or generate")
+    parser.add_argument("--report-name", default="api_test_report", help="Name of the PDF report file (without extension)")
+    parser.add_argument("--generate-template", action="store_true", help="Only generate a test template Excel file and exit")
+
+    args = parser.parse_args()
+
+    if args.generate_template:
+        template_generator.create_template_xlsx(args.test_file)
+        print(f"Template generated: {args.test_file}")
+    else:
+        run_example(args.test_file, args.report_name)
