@@ -89,6 +89,29 @@ class APITestFramework:
             print(f"Error parsing JSON body: {body_text}")
             return None
 
+    def parse_cookies(self, response) -> Dict[str, str]:
+        """Extract cookies from response headers into a dictionary"""
+        cookies = {}
+        if response.cookies:
+            for cookie in response.cookies:
+                cookies[cookie.name] = cookie.value
+
+        # Also try to parse from Set-Cookie header for cases where response.cookies doesn't capture everything
+        if 'Set-Cookie' in response.headers:
+            cookie_headers = response.headers.getall('Set-Cookie') if hasattr(response.headers, 'getall') else [
+                response.headers['Set-Cookie']]
+            for cookie_str in cookie_headers:
+                try:
+                    # Basic parsing of cookie string (name=value)
+                    name_value = cookie_str.split(';')[0].strip()
+                    if '=' in name_value:
+                        name, value = name_value.split('=', 1)
+                        cookies[name] = value
+                except Exception as e:
+                    print(f"Error parsing cookie: {e}")
+
+        return cookies
+
     def evaluate_condition(self, condition: str, result: Dict[str, Any]) -> bool:
         """Evaluate a condition against the result"""
         if not condition or pd.isna(condition):
@@ -195,18 +218,50 @@ class APITestFramework:
             if match:
                 var_name, result_path = match.groups()
                 try:
+                    # Special handling for full cookies
+                    if result_path.startswith('header.set-cookie') or result_path.startswith('header.Set-Cookie'):
+                        # Get the raw Set-Cookie header
+                        for header_name, header_value in result['headers'].items():
+                            if header_name.lower() == 'set-cookie':
+                                self.environment_vars[var_name] = header_value
+                                print(f"Set environment variable ${var_name} = {header_value}")
+                                break
+                        continue
+
                     # Get value from result using the path
                     parts = result_path.split('.')
-                    value = result
-                    for part in parts:
-                        if isinstance(value, dict) and part in value:
-                            value = value[part]
-                        elif isinstance(value, list) and part.isdigit():
-                            value = value[int(part)]
+
+                    # Special handling for header and cookie access
+                    if parts[0] == 'header':
+                        if len(parts) > 1:
+                            header_name = parts[1]
+                            # Case-insensitive header lookup
+                            header_value = None
+                            for key, val in result['headers'].items():
+                                if key.lower() == header_name.lower():
+                                    header_value = val
+                                    break
+                            value = header_value
                         else:
-                            print(f"Warning: Path {result_path} not found in result")
-                            value = None
-                            break
+                            value = result['headers']
+                    elif parts[0] == 'cookie':
+                        if len(parts) > 1:
+                            cookie_name = parts[1]
+                            value = result['cookies'].get(cookie_name)
+                        else:
+                            value = result['cookies']
+                    else:
+                        # Standard result path traversal
+                        value = result
+                        for part in parts:
+                            if isinstance(value, dict) and part in value:
+                                value = value[part]
+                            elif isinstance(value, list) and part.isdigit():
+                                value = value[int(part)]
+                            else:
+                                print(f"Warning: Path {result_path} not found in result")
+                                value = None
+                                break
 
                     if value is not None:
                         # Convert complex objects to string representation
@@ -219,6 +274,72 @@ class APITestFramework:
                         print(f"Set environment variable ${var_name} = {value}")
                 except Exception as e:
                     print(f"Error executing action '{single_action}': {e}")
+
+    def parse_headers(self, header_text: str) -> Dict[str, str]:
+        """Parse headers from various formats into a dictionary"""
+        if not header_text or pd.isna(header_text):
+            return {}
+
+        header_text = self.replace_env_vars(str(header_text))
+        headers = {}
+
+        try:
+            # Try parsing as JSON first
+            parsed = json.loads(header_text.replace("'", '"'))
+
+            # Handle different formats
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict):
+                        headers.update(item)
+            elif isinstance(parsed, dict):
+                headers.update(parsed)
+            return headers
+        except:
+            # Fall back to custom parsing if JSON parsing fails
+            try:
+                # Handle format like: [{'key': 'value'}, {'key2': 'value2'}]
+                # or even [{'key', 'value'}, {'key2', 'value2'}]
+                if header_text.startswith('[') and header_text.endswith(']'):
+                    content = header_text[1:-1].strip()
+                    pairs = []
+
+                    # Find dictionary pairs
+                    start = 0
+                    brace_level = 0
+                    current_pair = ""
+
+                    for i, char in enumerate(content):
+                        if char == '{':
+                            brace_level += 1
+                            current_pair += char
+                        elif char == '}':
+                            brace_level -= 1
+                            current_pair += char
+                            if brace_level == 0:
+                                pairs.append(current_pair)
+                                current_pair = ""
+                        elif brace_level > 0:
+                            current_pair += char
+
+                    # Process each pair
+                    for pair in pairs:
+                        inner = pair.strip('{}').strip()
+
+                        # Handle {'key': 'value'} format
+                        if ':' in inner:
+                            key, value = [p.strip(' \'"') for p in inner.split(':', 1)]
+                            headers[key] = value
+                        # Handle {'key', 'value'} format
+                        elif ',' in inner:
+                            key, value = [p.strip(' \'"') for p in inner.split(',', 1)]
+                            headers[key] = value
+
+                # Return parsed headers
+                return headers
+            except Exception as e:
+                print(f"Error parsing headers '{header_text}': {e}")
+                return {}
 
     def execute_test_case(self, test_case: pd.Series) -> bool:
         """Execute a single test case"""
@@ -247,17 +368,33 @@ class APITestFramework:
             # Parse headers
             headers = {}
             if 'inject_header' in test_case and not pd.isna(test_case['inject_header']):
-                header_list = self.parse_dict_list(test_case['inject_header'])
-                for header in header_list:
-                    for key, value in header.items():
-                        headers[key] = value
+                try:
+                    # Try parsing as JSON
+                    header_text = self.replace_env_vars(str(test_case['inject_header']))
+                    header_data = json.loads(header_text.replace("'", '"'))
+
+                    if isinstance(header_data, dict):
+                        headers.update(header_data)
+                    elif isinstance(header_data, list):
+                        for item in header_data:
+                            if isinstance(item, dict):
+                                headers.update(item)
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing headers as JSON: {e}")
+                    # Fall back to previous parsing method if needed
+
+            # Parse and use raw cookies (don't process them, just pass the raw string)
+            # We'll keep cookies in the headers instead of using the cookies parameter
+
+            if verbose:
+                print(f"Request Headers: {headers}")
 
             # Parse body
             body = None
             if 'body' in test_case and not pd.isna(test_case['body']):
                 body = self.parse_json_body(test_case['body'])
 
-            # Execute API request
+            # Execute API request with raw headers (including Cookie header as is)
             response = requests.request(
                 method=method,
                 url=api_path,
@@ -272,10 +409,14 @@ class APITestFramework:
             except:
                 response_json = {"text": response.text}
 
+            # Parse cookies from response
+            cookies = self.parse_cookies(response)
+
             result = {
                 "code": response.status_code,
                 "body": response_json,
-                "headers": dict(response.headers)
+                "headers": dict(response.headers),
+                "cookies": cookies
             }
 
             self.results[test_name] = result
@@ -287,6 +428,9 @@ class APITestFramework:
                 print("\nHeaders:")
                 for header, value in response.headers.items():
                     print(f"  {header}: {value}")
+                print("\nCookies:")
+                for cookie_name, cookie_value in cookies.items():
+                    print(f"  {cookie_name}: {cookie_value}")
                 print("\nBody:")
                 print(json.dumps(response_json, indent=2, ensure_ascii=False))
                 print("======================\n")
@@ -305,7 +449,7 @@ class APITestFramework:
                 print(f"Validating response body: {expected_body}")
                 if not self.evaluate_condition(expected_body, result):
                     print(f"❌ Response body validation failed: {expected_body}")
-                    print(f"Full response body: {json.dumps(result['body'], indent=2, ensure_ascii=False)}")
+                    # print(f"Full response body: {json.dumps(result['body'], indent=2, ensure_ascii=False)}")
                     return False
 
             # Validate response headers
