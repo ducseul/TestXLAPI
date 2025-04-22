@@ -1,5 +1,3 @@
-Okay, here is the complete documentation, including the user manual and the prompt library, presented together in Markdown format.
-
 -----
 
 # API Test Framework User Manual
