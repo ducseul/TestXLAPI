@@ -355,5 +355,6 @@ class APITestFramework:
             self.results,
             self.sheet_cycle_results,
             output_path,
-            self.cycles
+            self.cycles,
+            'TestXL-API'
         )

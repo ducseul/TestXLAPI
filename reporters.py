@@ -1,10 +1,11 @@
 from collections import OrderedDict, defaultdict
 from typing import Dict, List, Any
 import pandas as pd
+import datetime
 
 from reportlab.platypus import SimpleDocTemplate, Table, Paragraph, Spacer, PageBreak
 from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import inch
 
@@ -289,16 +290,56 @@ class ConsoleReporter:
 class PDFReporter:
     """Handles PDF report generation for test results"""
 
-    def generate_report(self, results: Dict[str, Dict[str, Any]], sheet_cycle_results: Dict[str, Dict[int, List[Dict[str, Any]]]], output_path: str = "test_report.pdf", cycles: int = 1) -> None:
+    def generate_report(self, results: Dict[str, Dict[str, Any]],
+                        sheet_cycle_results: Dict[str, Dict[int, List[Dict[str, Any]]]],
+                        output_path: str = "test_report.pdf", cycles: int = 1,
+                        program_name: str = "API Test Runner") -> None:
         """Generates a PDF report of the test results with per-sheet insights,
            failed/errored tests, and slowest tests."""
         doc = SimpleDocTemplate(output_path, pagesize=letter)
         elements = []
         styles = getSampleStyleSheet()
 
-        # Add a main title
-        cycle_text = f" ({cycles} Cycles)" if cycles > 1 else ""
-        elements.append(Paragraph(f"API Test Report{cycle_text}", styles['Title']))
+        # Create custom styles for the header section
+        header_title_style = ParagraphStyle(
+            'HeaderTitle',
+            parent=styles['Title'],
+            fontSize=16,
+            spaceAfter=10,
+        )
+
+        header_info_style = ParagraphStyle(
+            'HeaderInfo',
+            parent=styles['Normal'],
+            fontSize=10,
+            spaceAfter=6,
+        )
+
+        # --- Add Header Section with Metadata ---
+        elements.append(Paragraph(f"{program_name} - Test Report", header_title_style))
+
+        # Get current timestamp
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        elements.append(Paragraph(f"<b>Report Generated:</b> {timestamp}", header_info_style))
+
+        # Total test sheets count (unique sheet names from the results)
+        sheet_names = set()
+        for full_test_name in results.keys():
+            sheet_name = full_test_name.split("::", 1)[0]
+            sheet_names.add(sheet_name)
+
+        elements.append(Paragraph(f"<b>Total Test Sheets:</b> {len(sheet_names)}", header_info_style))
+        elements.append(Paragraph(f"<b>Test Cycles:</b> {cycles}", header_info_style))
+
+        # Total test cases count
+        unique_test_count = len(set([full_name.split("::", 1)[1] for full_name in results.keys()]))
+        elements.append(Paragraph(f"<b>Total Test Cases:</b> {unique_test_count}", header_info_style))
+
+        # Display sheet names for reference
+        if len(sheet_names) > 0:
+            sheets_text = ", ".join(sorted(sheet_names))
+            elements.append(Paragraph(f"<b>Test Sheets:</b> {sheets_text}", header_info_style))
+
         elements.append(Spacer(1, 0.5 * inch))
 
         # --- Overall Summary ---
@@ -358,7 +399,28 @@ class PDFReporter:
             elements.append(Paragraph(f"Results for Sheet: {sheet_name}", styles['Heading2']))
             elements.append(Spacer(1, 0.25 * inch))
 
-            # ... existing sheet summary code ...
+            # Add Sheet Summary
+            passed_count = 0
+            failed_count = 0
+            error_count = 0
+            skipped_count = 0
+
+            for _, result_data in sheet_results_list:
+                status = result_data.get("status", "Unknown")
+                if status == "Passed":
+                    passed_count += 1
+                elif status == "Failed":
+                    failed_count += 1
+                elif status == "Error":
+                    error_count += 1
+                elif status == "Skipped":
+                    skipped_count += 1
+
+            total_count = len(sheet_results_list)
+            elements.append(Paragraph(
+                f"Test Cases: {total_count} | Passed: {passed_count} | Failed: {failed_count} | Errors: {error_count} | Skipped: {skipped_count}",
+                styles['Normal']))
+            elements.append(Spacer(1, 0.2 * inch))
 
             # Add Individual Cycle Results Section if multiple cycles were run
             if cycles > 1 and sheet_name in sheet_cycle_results:
@@ -417,7 +479,7 @@ class PDFReporter:
                 elements.append(Spacer(1, 0.4 * inch))
 
             # Add Detailed Results for this Sheet
-            elements.append(Paragraph("Detailed Results (This Sheet)", styles['Heading3']))
+            elements.append(Paragraph(f"Detailed Results ({sheet_name})", styles['Heading3']))
             elements.append(Spacer(1, 0.1 * inch))
 
             for test_name, result_data in sheet_results_list:
