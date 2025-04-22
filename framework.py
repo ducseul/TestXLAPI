@@ -3,6 +3,9 @@ from typing import Dict, List, Any, Optional, Union
 import traceback
 import sys
 import os
+import statistics
+from collections import defaultdict
+import time
 
 from config import ConfigLoader
 from api_client import APIClient
@@ -12,13 +15,15 @@ from reporters import ConsoleReporter, PDFReporter
 
 
 class APITestFramework:
-    def __init__(self, xlsx_path: str):
+    def __init__(self, xlsx_path: str, cycles: int = 1):
         """Initialize the API test framework with the path to an Excel file"""
         self.xlsx_path = xlsx_path
         self.environment_vars = {}
         # self.results will store detailed results per test case (used for final summary)
         self.results: Dict[str, Dict[str, Any]] = {}
+        self.cycle_results: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         self.verbose = False  # Initialize verbose flag
+        self.cycles = max(1, cycles)  # Ensure at least 1 cycle
 
         # Load configuration and environment variables
         self.config_loader = ConfigLoader(xlsx_path)
@@ -33,7 +38,7 @@ class APITestFramework:
         self.console_reporter = ConsoleReporter()
         self.pdf_reporter = PDFReporter()
 
-    def execute_test_case(self, test_case: pd.Series, excel_sheet_name: str) -> Dict[str, Any]:
+    def execute_test_case(self, test_case: pd.Series, excel_sheet_name: str, cycle: int = 1) -> Dict[str, Any]:
         """Execute a single test case and return detailed results."""
         test_name = str(test_case.get('test_case_name',
                                       f'Unnamed Test Case Row {test_case.name + 2}'))
@@ -48,14 +53,16 @@ class APITestFramework:
             "header_validation": "N/A",
             "details": "",
             "elapsed_time_ms": "N/A",
+            "cycle": cycle,
         }
-        self.results[full_test_name] = detailed_result
 
         # Check if test case has api_path
         api_path_raw = test_case.get('api_path', None)
         if pd.isna(api_path_raw) or str(api_path_raw).strip() == '':
             print(f"\nSkipping test case '{test_name}' in sheet '{excel_sheet_name}': 'api_path' is missing or empty.")
             detailed_result["details"] = "'api_path' is missing or empty."
+            # Store in cycle_results for the final report
+            self.cycle_results[full_test_name].append(detailed_result)
             return detailed_result
 
         # Check verbose flag specific to this test case row
@@ -99,16 +106,19 @@ class APITestFramework:
             # Determine final test status
             if validation_results["test_passed_validations"]:
                 detailed_result["status"] = "Passed"
-                print(f"✅ Test case '{test_name}' PASSED")
+                if cycle == 1 or self.verbose:  # Only print pass for first cycle unless verbose
+                    print(f"✅ Test case '{test_name}' PASSED (Cycle {cycle}/{self.cycles})")
             else:
                 detailed_result["status"] = "Failed"
-                print(f"❌ Test case '{test_name}' FAILED")
+                print(f"❌ Test case '{test_name}' FAILED (Cycle {cycle}/{self.cycles})")
 
             # Execute actions
             action = test_case.get('action', None)
             if pd.notna(action):
                 self.validator.execute_action(action, api_result_data)
 
+            # Store in cycle_results for the final report
+            self.cycle_results[full_test_name].append(detailed_result)
             return detailed_result
 
         except Exception as e:
@@ -116,13 +126,15 @@ class APITestFramework:
             if hasattr(e, '__module__') and e.__module__ == 'requests.exceptions':
                 detailed_result["status"] = "Failed"
                 detailed_result["details"] += f"Request Error: {e}"
-                print(f"❌ Request Error executing test case '{test_name}': {e}")
+                print(f"❌ Request Error executing test case '{test_name}' (Cycle {cycle}/{self.cycles}): {e}")
             else:
                 detailed_result["status"] = "Error"
                 detailed_result["details"] += f"Unexpected Error: {e} - {traceback.format_exc()}"
-                print(f"❌ Unexpected Error executing test case '{test_name}': {e}")
+                print(f"❌ Unexpected Error executing test case '{test_name}' (Cycle {cycle}/{self.cycles}): {e}")
                 traceback.print_exc()
 
+            # Store in cycle_results for the final report
+            self.cycle_results[full_test_name].append(detailed_result)
             return detailed_result
         finally:
             self.verbose = False  # Reset verbose flag
@@ -154,8 +166,9 @@ class APITestFramework:
                 setup_df = pd.read_excel(self.xlsx_path, sheet_name=setup_sheet_name)
                 setup_df = setup_df.dropna(subset=['test_case_name'])
 
+                # Always run setup only once regardless of cycles
                 for index, test_case in setup_df.iterrows():
-                    detailed_result = self.execute_test_case(test_case, setup_sheet_name)
+                    detailed_result = self.execute_test_case(test_case, setup_sheet_name, cycle=1)
                     setup_results_list.append(detailed_result)
 
                     if detailed_result["status"] in ["Failed", "Error"]:
@@ -175,21 +188,43 @@ class APITestFramework:
         if setup_success:
             for sheet_name in sheet_names[2:]:  # Start from the 3rd sheet
                 print(f"\n=== Running Test Sheet: {sheet_name} ===")
-                sheet_results_list = []  # Collect results for printing table
+                cycle_sheet_results = []  # Collect all cycle results for this sheet
                 sheet_processing_error = None  # Track errors loading/processing sheet
 
                 try:
                     test_df = pd.read_excel(self.xlsx_path, sheet_name=sheet_name)
                     test_df = test_df.dropna(subset=['test_case_name'])
 
-                    sheet_has_failures = False
-                    for index, test_case in test_df.iterrows():
-                        detailed_result = self.execute_test_case(test_case, sheet_name)
-                        sheet_results_list.append(detailed_result)
+                    # Run each cycle
+                    for cycle in range(1, self.cycles + 1):
+                        if self.cycles > 1:
+                            print(f"\n--- Cycle {cycle}/{self.cycles} ---")
 
-                        if detailed_result["status"] in ["Failed", "Error"]:
-                            sheet_has_failures = True
+                        sheet_has_failures = False
+                        cycle_results_list = []  # Results for this cycle
 
+                        for index, test_case in test_df.iterrows():
+                            # Small pause between cycles to avoid rate limiting or server flooding
+                            if cycle > 1 and index == 0:
+                                time.sleep(0.5)
+
+                            detailed_result = self.execute_test_case(test_case, sheet_name, cycle)
+                            cycle_results_list.append(detailed_result)
+
+                            if detailed_result["status"] in ["Failed", "Error"]:
+                                sheet_has_failures = True
+
+                        # Add current cycle results to the overall sheet results
+                        cycle_sheet_results.extend(cycle_results_list)
+
+                        # Only print table for individual cycles if running multiple cycles
+                        if self.cycles > 1:
+                            self.console_reporter.print_sheet_results_table(
+                                f"{sheet_name} (Cycle {cycle})",
+                                cycle_results_list
+                            )
+
+                    # After all cycles, check if there were failures
                     if not sheet_has_failures and not test_df.empty:
                         print(f"✅ All executed tests in sheet '{sheet_name}' PASSED")
                     elif test_df.empty:
@@ -199,8 +234,17 @@ class APITestFramework:
                     print(f"Error processing Test sheet '{sheet_name}': {e}")
                     sheet_processing_error = e
                 finally:
-                    # Print table for the current sheet's results
-                    self.console_reporter.print_sheet_results_table(sheet_name, sheet_results_list)
+                    # Generate combined statistics for each test case across all cycles
+                    if self.cycles > 1:
+                        self._aggregate_cycle_results(sheet_name)
+
+                    # Print table for the entire sheet (combined cycles if applicable)
+                    if self.cycles > 1:
+                        self.console_reporter.print_combined_sheet_results(sheet_name, self.results)
+                    else:
+                        # For single cycle, just print the results
+                        self.console_reporter.print_sheet_results_table(sheet_name, cycle_sheet_results)
+
                     if sheet_processing_error:
                         print(f"‼️ Processing of sheet '{sheet_name}' encountered an error: {sheet_processing_error}")
 
@@ -209,6 +253,102 @@ class APITestFramework:
 
         return self.results
 
+    def _aggregate_cycle_results(self, sheet_name: str) -> None:
+        """
+        Aggregate results from multiple cycles for tests in the specified sheet.
+        Creates statistical summaries like min/max/avg/median response times.
+        """
+        # Find all test cases for this sheet
+        sheet_test_keys = [key for key in self.cycle_results.keys() if key.startswith(f"{sheet_name}::")]
+
+        for full_test_name in sheet_test_keys:
+            cycle_data = self.cycle_results[full_test_name]
+
+            # Skip if no data
+            if not cycle_data:
+                continue
+
+            # Get test name from the combined key
+            _, test_name = full_test_name.split("::", 1)
+
+            # Initialize aggregated result dictionary
+            aggregated_result = {
+                "test_name": test_name,
+                "cycles_run": len(cycle_data),
+                "passed_count": 0,
+                "failed_count": 0,
+                "error_count": 0,
+                "skipped_count": 0,
+                "min_time_ms": None,
+                "max_time_ms": None,
+                "avg_time_ms": None,
+                "median_time_ms": None,
+                "std_dev_ms": None,
+                "last_status": cycle_data[-1]["status"] if cycle_data else "Unknown",
+                "details": "",
+            }
+
+            # Collect response times and count statuses
+            response_times = []
+
+            for result in cycle_data:
+                status = result.get("status", "Unknown")
+
+                if status == "Passed":
+                    aggregated_result["passed_count"] += 1
+                elif status == "Failed":
+                    aggregated_result["failed_count"] += 1
+                elif status == "Error":
+                    aggregated_result["error_count"] += 1
+                elif status == "Skipped":
+                    aggregated_result["skipped_count"] += 1
+
+                # Collect response time if available
+                elapsed_time = result.get("elapsed_time_ms")
+                if isinstance(elapsed_time, (int, float)):
+                    response_times.append(elapsed_time)
+
+            # Calculate response time statistics if we have data
+            if response_times:
+                aggregated_result["min_time_ms"] = min(response_times)
+                aggregated_result["max_time_ms"] = max(response_times)
+                aggregated_result["avg_time_ms"] = sum(response_times) / len(response_times)
+                aggregated_result["median_time_ms"] = statistics.median(response_times)
+                if len(response_times) > 1:
+                    aggregated_result["std_dev_ms"] = statistics.stdev(response_times)
+                else:
+                    aggregated_result["std_dev_ms"] = 0
+
+            # Determine overall status
+            if aggregated_result["error_count"] > 0:
+                aggregated_result["status"] = "Error"
+            elif aggregated_result["failed_count"] > 0:
+                aggregated_result["status"] = "Failed"
+            elif aggregated_result["passed_count"] > 0:
+                aggregated_result["status"] = "Passed"
+            else:
+                aggregated_result["status"] = "Skipped"
+
+            # Add failure rate
+            total_attempts = aggregated_result["passed_count"] + aggregated_result["failed_count"] + aggregated_result[
+                "error_count"]
+            if total_attempts > 0:
+                failure_rate = (aggregated_result["failed_count"] + aggregated_result[
+                    "error_count"]) / total_attempts * 100
+                aggregated_result["failure_rate"] = f"{failure_rate:.1f}%"
+            else:
+                aggregated_result["failure_rate"] = "N/A"
+
+            # Add success rate
+            if total_attempts > 0:
+                success_rate = aggregated_result["passed_count"] / total_attempts * 100
+                aggregated_result["success_rate"] = f"{success_rate:.1f}%"
+            else:
+                aggregated_result["success_rate"] = "N/A"
+
+            # Store in the main results dictionary
+            self.results[full_test_name] = aggregated_result
+
     def generate_pdf_report(self, output_path: str = "test_report.pdf"):
         """Generates a PDF report of the test results"""
-        self.pdf_reporter.generate_report(self.results, output_path)
+        self.pdf_reporter.generate_report(self.results, output_path, self.cycles)
