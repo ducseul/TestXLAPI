@@ -37,6 +37,7 @@ class APITestFramework:
         # Initialize reporters
         self.console_reporter = ConsoleReporter()
         self.pdf_reporter = PDFReporter()
+        self.sheet_cycle_results = {}
 
     def execute_test_case(self, test_case: pd.Series, excel_sheet_name: str, cycle: int = 1) -> Dict[str, Any]:
         """Execute a single test case and return detailed results."""
@@ -188,7 +189,9 @@ class APITestFramework:
         if setup_success:
             for sheet_name in sheet_names[2:]:  # Start from the 3rd sheet
                 print(f"\n=== Running Test Sheet: {sheet_name} ===")
-                cycle_sheet_results = []  # Collect all cycle results for this sheet
+
+                # Store results by cycle for this sheet
+                cycle_results_by_cycle = defaultdict(list)
                 sheet_processing_error = None  # Track errors loading/processing sheet
 
                 try:
@@ -204,25 +207,23 @@ class APITestFramework:
                         cycle_results_list = []  # Results for this cycle
 
                         for index, test_case in test_df.iterrows():
-                            # Small pause between cycles to avoid rate limiting or server flooding
+                            # Small pause between cycles to avoid rate limiting
                             if cycle > 1 and index == 0:
                                 time.sleep(0.5)
 
                             detailed_result = self.execute_test_case(test_case, sheet_name, cycle)
                             cycle_results_list.append(detailed_result)
+                            cycle_results_by_cycle[cycle].append(detailed_result)
 
                             if detailed_result["status"] in ["Failed", "Error"]:
                                 sheet_has_failures = True
 
-                        # Add current cycle results to the overall sheet results
-                        cycle_sheet_results.extend(cycle_results_list)
-
-                        # Only print table for individual cycles if running multiple cycles
-                        if self.cycles > 1:
-                            self.console_reporter.print_sheet_results_table(
-                                f"{sheet_name} (Cycle {cycle})",
-                                cycle_results_list
-                            )
+                        # Print table for individual cycles
+                        self.console_reporter.print_cycle_results(
+                            sheet_name,
+                            cycle,
+                            cycle_results_list
+                        )
 
                     # After all cycles, check if there were failures
                     if not sheet_has_failures and not test_df.empty:
@@ -233,17 +234,16 @@ class APITestFramework:
                 except Exception as e:
                     print(f"Error processing Test sheet '{sheet_name}': {e}")
                     sheet_processing_error = e
+
                 finally:
                     # Generate combined statistics for each test case across all cycles
                     if self.cycles > 1:
                         self._aggregate_cycle_results(sheet_name)
-
-                    # Print table for the entire sheet (combined cycles if applicable)
-                    if self.cycles > 1:
+                        # Print table for the combined cycles
                         self.console_reporter.print_combined_sheet_results(sheet_name, self.results)
-                    else:
-                        # For single cycle, just print the results
-                        self.console_reporter.print_sheet_results_table(sheet_name, cycle_sheet_results)
+
+                        # Store cycle results for PDF reporting
+                        self.sheet_cycle_results[sheet_name] = cycle_results_by_cycle
 
                     if sheet_processing_error:
                         print(f"‼️ Processing of sheet '{sheet_name}' encountered an error: {sheet_processing_error}")
@@ -351,4 +351,9 @@ class APITestFramework:
 
     def generate_pdf_report(self, output_path: str = "test_report.pdf"):
         """Generates a PDF report of the test results"""
-        self.pdf_reporter.generate_report(self.results, output_path, self.cycles)
+        self.pdf_reporter.generate_report(
+            self.results,
+            self.sheet_cycle_results,
+            output_path,
+            self.cycles
+        )

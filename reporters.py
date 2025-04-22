@@ -209,12 +209,87 @@ class ConsoleReporter:
         print(f"Skipped: {skipped_count}")
         print("-" * 30)
 
+    def print_cycle_results(self, sheet_name: str, cycle: int, results_list: List[Dict[str, Any]]) -> None:
+        """Prints the results for a specific cycle in a formatted table."""
+        if not results_list:
+            print(f"\nNo test cases executed in sheet '{sheet_name}' for cycle {cycle}.")
+            return
+
+        print(f"\n--- Results for Sheet: {sheet_name} (Cycle {cycle}) ---")
+
+        # Define columns and their corresponding keys in the result dictionary
+        columns = OrderedDict([
+            ("Test Name", "test_name"),
+            ("Response Time", "elapsed_time_ms"),
+            ("Status", "status"),
+            ("Code", "actual_code"),
+            ("Body Val", "body_validation"),
+            ("Header Val", "header_validation"),
+            ("Details", "details"),
+        ])
+
+        # Define maximum width for the 'Details' column to keep the table manageable
+        max_details_width = 80
+
+        # Calculate column widths dynamically based on headers and content
+        col_widths = {header: len(header) for header in columns.keys()}
+
+        for result in results_list:
+            for header, key in columns.items():
+                value = result.get(key, '')
+                # Format response time for display and width calculation
+                if key == "elapsed_time_ms":
+                    value_str = f"{value:.2f} ms" if isinstance(value, (int, float)) else str(value)
+                else:
+                    value_str = str(value)
+
+                if header == "Details":
+                    value_str = value_str[:max_details_width]  # Truncate for width calculation
+
+                col_widths[header] = max(col_widths[header], len(value_str))
+
+        # Add padding to widths
+        col_padding = 2
+        padded_widths = {header: width + col_padding for header, width in col_widths.items()}
+
+        # Print Header Row
+        header_row = "| " + " | ".join(
+            header.ljust(padded_widths[header] - col_padding) for header in columns.keys()) + " |"
+        print(header_row)
+
+        # Print Separator Line
+        separator_line = "|-" + "-|-".join(
+            "-" * (padded_widths[header] - col_padding) for header in columns.keys()) + "-|"
+        print(separator_line)
+
+        # Print Data Rows
+        for result in results_list:
+            row_data = []
+            for header, key in columns.items():
+                value = result.get(key, '')
+                # Format response time for display
+                if key == "elapsed_time_ms":
+                    value_str = f"{value:.2f} ms" if isinstance(value, (int, float)) else str(value)
+                else:
+                    value_str = str(value)
+
+                # Truncate and pad details separately
+                if header == "Details":
+                    if len(value_str) > max_details_width:
+                        value_str = value_str[:max_details_width - 3] + "..."  # Truncate and add ellipsis
+                    row_data.append(value_str.ljust(padded_widths[header] - col_padding))
+                else:
+                    row_data.append(value_str.ljust(padded_widths[header] - col_padding))
+
+            print("| " + " | ".join(row_data) + " |")
+
+        print("-" * len(header_row))  # Match separator length to header row
+
 
 class PDFReporter:
     """Handles PDF report generation for test results"""
 
-    def generate_report(self, results: Dict[str, Dict[str, Any]], output_path: str = "test_report.pdf",
-                        cycles: int = 1) -> None:
+    def generate_report(self, results: Dict[str, Dict[str, Any]], sheet_cycle_results: Dict[str, Dict[int, List[Dict[str, Any]]]], output_path: str = "test_report.pdf", cycles: int = 1) -> None:
         """Generates a PDF report of the test results with per-sheet insights,
            failed/errored tests, and slowest tests."""
         doc = SimpleDocTemplate(output_path, pagesize=letter)
@@ -279,40 +354,22 @@ class PDFReporter:
         for sheet_name in sorted_sheet_names:
             sheet_results_list = results_by_sheet[sheet_name]
 
-            if not first_sheet:
-                elements.append(PageBreak())
-            else:
-                first_sheet = False
-
+            elements.append(PageBreak())
             elements.append(Paragraph(f"Results for Sheet: {sheet_name}", styles['Heading2']))
             elements.append(Spacer(1, 0.25 * inch))
 
-            # Calculate per-sheet summary
-            total_attempted_sheet = len(sheet_results_list)
-            passed_count_sheet = 0
-            failed_count_sheet = 0
-            error_count_sheet = 0
-            skipped_count_sheet = 0
+            # ... existing sheet summary code ...
 
-            for _, result_data in sheet_results_list:
-                status = result_data.get("status", "Unknown")
-                if status == "Passed":
-                    passed_count_sheet += 1
-                elif status == "Failed":
-                    failed_count_sheet += 1
-                elif status == "Error":
-                    error_count_sheet += 1
-                elif status == "Skipped":
-                    skipped_count_sheet += 1
+            # Add Individual Cycle Results Section if multiple cycles were run
+            if cycles > 1 and sheet_name in sheet_cycle_results:
+                self.add_cycle_results_section(
+                    elements,
+                    styles,
+                    sheet_name,
+                    sheet_cycle_results[sheet_name]
+                )
 
-            summary_data_sheet = [['Total Attempted', 'Passed', 'Failed', 'Errors', 'Skipped'],
-                                  [total_attempted_sheet, passed_count_sheet, failed_count_sheet, error_count_sheet,
-                                   skipped_count_sheet]]
-
-            summary_table_sheet = Table(summary_data_sheet, colWidths=[1.2 * inch] * 5)
-            summary_table_sheet.setStyle(summary_table_style)
-            elements.append(summary_table_sheet)
-            elements.append(Spacer(1, 0.4 * inch))
+                elements.append(Spacer(1, 0.3 * inch))
 
             # Add Performance Statistics Section if multiple cycles were run
             if cycles > 1:
@@ -562,3 +619,54 @@ class PDFReporter:
             print(f"PDF report generated successfully at {output_path}")
         except Exception as e:
             print(f"Error generating PDF report: {e}")
+
+    def add_cycle_results_section(self, elements, styles, sheet_name, cycle_results_by_cycle):
+        """Adds a section for individual cycle results to the PDF report."""
+        elements.append(Paragraph("Individual Cycle Results", styles['Heading3']))
+        elements.append(Spacer(1, 0.1 * inch))
+
+        # Group results by cycle
+        for cycle, cycle_results in sorted(cycle_results_by_cycle.items()):
+            elements.append(Paragraph(f"Cycle {cycle}", styles['Heading4']))
+
+            # Define cycle results table headers
+            cycle_data = [['Test Case', 'Status', 'Response Time', 'Response Code', 'Details']]
+
+            # Add each test case's data for this cycle
+            for result in cycle_results:
+                test_name = result.get("test_name", "Unknown")
+                status = result.get("status", "Unknown")
+
+                # Format response time
+                elapsed_time = result.get("elapsed_time_ms")
+                if isinstance(elapsed_time, (int, float)):
+                    time_str = f"{elapsed_time:.2f} ms"
+                else:
+                    time_str = str(elapsed_time)
+
+                code = result.get("actual_code", "N/A")
+                details = result.get("details", "")
+                details_str = str(details)[:100] + "..." if len(str(details)) > 100 else str(details)
+
+                cycle_data.append([test_name, status, time_str, code, details_str])
+
+            # Create and add the table
+            cycle_table = Table(cycle_data, colWidths=[1.8 * inch, 0.8 * inch, 1.2 * inch, 1.2 * inch, 2 * inch])
+
+            # Style for the cycle table
+            cycle_table_style = [
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('ALIGN', (1, 1), (3, -1), 'CENTER'),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ]
+
+            cycle_table.setStyle(cycle_table_style)
+            elements.append(cycle_table)
+            elements.append(Spacer(1, 0.25 * inch))
