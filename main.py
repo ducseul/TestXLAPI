@@ -1,9 +1,9 @@
 import argparse
 import template_generator
-from exl_api_fw import APITestFramework
+from framework import APITestFramework
 
 
-def run_example(test_file, report_name='api_test_report'):
+def run_example(test_file, report_name='report'):
     test_framework = APITestFramework(test_file)
     test_framework.run_tests()
     test_framework.generate_pdf_report(f"{report_name}.pdf")
@@ -16,7 +16,7 @@ if __name__ == "__main__":
         The detailed console output helps you debug and understand the results of each test case.
     """)
     parser.add_argument("test_file", help="Path to the Excel (.xlsx) test file to use or generate")
-    parser.add_argument("--report-name", default="api_test_report", help="Name of the PDF report file (without extension)")
+    parser.add_argument("--report-name", default="report", help="Name of the PDF report file (without extension)")
     parser.add_argument("--generate-template", action="store_true", help="Only generate a test template Excel file and exit")
 
     args = parser.parse_args()
